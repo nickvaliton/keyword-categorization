@@ -272,29 +272,56 @@ Rules:
 
 /**
  * Call the Anthropic Messages API from the browser.
- * Requires the user's API key and the anthropic-dangerous-direct-browser-calls header.
+ *
+ * Note: "anthropic-dangerous-direct-browser-calls" is a client-side TypeScript
+ * SDK flag only — do NOT send it as a header. Including non-standard headers in
+ * the CORS preflight causes the browser to reject the request before it is even
+ * sent because Anthropic's server only allows its documented header names.
  */
 async function callClaude(apiKey, prompt) {
-  const res = await fetch(CLAUDE_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-calls': 'true',
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 8192,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
+  let res;
+  try {
+    res = await fetch(CLAUDE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 8192,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+  } catch (networkErr) {
+    // "Failed to fetch" means the request never reached the server.
+    // Most common causes:
+    //   1. Page opened as a file:// URL (CORS is blocked for file origins)
+    //   2. Network / firewall blocking api.anthropic.com
+    //   3. A browser extension (ad-blocker, privacy shield) blocking the request
+    if (window.location.protocol === 'file:') {
+      throw new Error(
+        'This tool must be served over HTTP or HTTPS. ' +
+        'Open it via GitHub Pages, or run a local server ' +
+        '(e.g. "python -m http.server 8080") and visit http://localhost:8080.'
+      );
+    }
+    throw new Error(
+      'Network request to Anthropic failed ("Failed to fetch"). ' +
+      'Possible causes: (1) no internet connection, (2) a browser extension ' +
+      'blocking the request — try disabling ad-blockers, (3) a firewall ' +
+      'blocking api.anthropic.com. Open the browser console (F12) for details.'
+    );
+  }
 
   if (!res.ok) {
     let errMsg = `API error ${res.status}`;
     try {
       const errData = await res.json();
       errMsg = errData?.error?.message || errMsg;
+      if (res.status === 401) errMsg = 'Invalid API key. Check your Anthropic key and try again.';
+      if (res.status === 429) errMsg = 'Rate limit reached. Wait a moment and try again.';
     } catch { /* ignore */ }
     throw new Error(errMsg);
   }
